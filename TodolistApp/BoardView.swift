@@ -23,6 +23,17 @@ struct BoardView: View {
             .padding(.bottom, 12)
         }
         .background(Color.appBackground)
+        .background(returnShortcutButton)
+    }
+
+    /// 不可见按钮，仅用于承载「按 Return（回车）打开新建弹窗」快捷键。
+    /// 放在背景层不占空间，也不可点击；键盘事件由窗口统一派发。
+    /// 当 NewCardSheet 弹出后焦点转移，回车由 sheet 处理，不会重复触发。
+    private var returnShortcutButton: some View {
+        Button(action: { showNewCard = true }) {
+            Color.clear
+        }
+        .keyboardShortcut(.return, modifiers: [])
     }
 
     private var topBar: some View {
