@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# 编译产物：每次 build 重新生成，不入版本库
+TodolistApp.app/
+build/
+
+# Swift / Xcode 构建中间产物
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+.build/
+
+# 其他编辑器/系统杂项
+*.swp
+*.swo
+*~
