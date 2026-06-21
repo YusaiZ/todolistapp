@@ -10,21 +10,34 @@ struct CardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(card.content.isEmpty ? "（空）" : card.content)
-                .font(.system(size: 13))
-                .foregroundColor(.primary)
-                .lineLimit(3)
+            // 标题（必填，空标题用灰色「（无标题）」占位）
+            Text(card.title.isEmpty ? "（无标题）" : card.title)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(card.title.isEmpty ? .secondary : .primary)
+                .lineLimit(2)
                 .truncationMode(.tail)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
+
+            // 详情摘要：只在有内容时显示一行，省略号收尾（全文在编辑弹窗看）。
+            let detailTrimmed = card.detail.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !detailTrimmed.isEmpty {
+                Text(detailTrimmed)
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
             let cardTags = state.tags(for: card)
             if !cardTags.isEmpty {
                 FlowLayout(spacing: 6, lineSpacing: 6) {
                     ForEach(cardTags) { tag in
                         Text(tag.name)
-                            .font(.system(size: 10, weight: .medium))
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundColor(TagPalette.fg(tag.colorIndex))
                             .padding(.horizontal, 7)
                             .padding(.vertical, 2)
@@ -36,7 +49,7 @@ struct CardView: View {
                 }
             }
         }
-        .padding(12)
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 10)

@@ -131,24 +131,62 @@ enum TagPalette {
 /// 单个待办事件卡片。
 struct Card: Identifiable, Codable {
     var id: UUID
-    var content: String
+    var title: String          // 简短标题
+    var detail: String         // 详情 / 备忘纪要（可多行，可为空）
     var tagIds: [UUID]
     var status: Status
-    var order: Int          // 列内排序，升序
+    var order: Int             // 列内排序，升序
     var createdAt: Date
 
     init(id: UUID = UUID(),
-         content: String,
+         title: String,
+         detail: String = "",
          tagIds: [UUID] = [],
          status: Status = .plan,
          order: Int = 0,
          createdAt: Date = Date()) {
         self.id = id
-        self.content = content
+        self.title = title
+        self.detail = detail
         self.tagIds = tagIds
         self.status = status
         self.order = order
         self.createdAt = createdAt
+    }
+
+    // 兼容旧版本 JSON：早期 Card 只有一个 content 字段，这里迁移到 title；
+    // detail 缺省为空。与 Tag 的 colorIndex 兜底是同一套范式。
+    enum CodingKeys: String, CodingKey {
+        case id, title, detail, tagIds, status, order, createdAt
+        case content   // 仅旧数据用，解码时回退，编码时不写出
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        // 新字段优先；缺失则回退旧 content；再缺失则空串。
+        if let t = try c.decodeIfPresent(String.self, forKey: .title) {
+            title = t
+        } else {
+            title = try c.decodeIfPresent(String.self, forKey: .content) ?? ""
+        }
+        detail = try c.decodeIfPresent(String.self, forKey: .detail) ?? ""
+        tagIds = try c.decodeIfPresent([UUID].self, forKey: .tagIds) ?? []
+        status = try c.decode(Status.self, forKey: .status)
+        order = try c.decode(Int.self, forKey: .order)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+    }
+
+    // 显式编码：故意不写出旧 content 键，让迁移后新数据彻底切到 title/detail。
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(title, forKey: .title)
+        try c.encode(detail, forKey: .detail)
+        try c.encode(tagIds, forKey: .tagIds)
+        try c.encode(status, forKey: .status)
+        try c.encode(order, forKey: .order)
+        try c.encode(createdAt, forKey: .createdAt)
     }
 }
 

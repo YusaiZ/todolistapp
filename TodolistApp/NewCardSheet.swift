@@ -14,7 +14,8 @@ struct NewCardSheet: View {
 
     let mode: SheetMode
 
-    @State private var content: String = ""
+    @State private var title: String = ""
+    @State private var detail: String = ""
     @State private var selectedTagIds: [UUID] = []
     @State private var tagInput: String = ""
     @State private var showSuggestions = false
@@ -31,15 +32,13 @@ struct NewCardSheet: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(.primary)
 
-            // 内容
+            // 标题
             VStack(alignment: .leading, spacing: 6) {
-                Text("内容")
+                Text("标题")
                     .fieldLabel()
-                TextEditor(text: $content)
-                    .font(.system(size: 13))
-                    .scrollContentBackground(.hidden)
-                    .padding(8)
-                    .frame(minHeight: 84)
+                NoFocusTextField(text: $title, placeholder: "一句话概括这件事", font: .systemFont(ofSize: 15))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
                     .background(
                         RoundedRectangle(cornerRadius: 8)
                             .fill(Color(NSColor.controlBackgroundColor))
@@ -48,6 +47,26 @@ struct NewCardSheet: View {
                         RoundedRectangle(cornerRadius: 8)
                             .strokeBorder(Color.inputBorder, lineWidth: 1)
                     )
+            }
+
+            // 详情
+            VStack(alignment: .leading, spacing: 6) {
+                Text("详情")
+                    .fieldLabel()
+                TextEditor(text: $detail)
+                    .font(.system(size: 15))
+                    .scrollContentBackground(.hidden)
+                    .padding(8)
+                    .frame(minHeight: 160, alignment: .top)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color(NSColor.controlBackgroundColor))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(Color.inputBorder, lineWidth: 1)
+                    )
+                    .focusEffectDisabled()
             }
 
             // 标签
@@ -103,11 +122,11 @@ struct NewCardSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button(isEdit ? "保存" : "创建") { commit() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(20)
-        .frame(width: 460, height: 420)
+        .frame(width: 620, height: 680)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear { configureForMode() }
     }
@@ -115,8 +134,12 @@ struct NewCardSheet: View {
     // MARK: 子视图
 
     private var tagInputField: some View {
-        TextField("输入 · 选择标签…", text: $tagInput, onCommit: { commitTagInput() })
-            .font(.system(size: 13))
+        NoFocusTextField(
+            text: $tagInput,
+            placeholder: "输入 · 选择标签…",
+            font: .systemFont(ofSize: 15),
+            onCommit: { commitTagInput() }
+        )
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .background(
@@ -225,23 +248,24 @@ struct NewCardSheet: View {
 
     private func configureForMode() {
         if case .edit(let card) = mode {
-            content = card.content
+            title = card.title
+            detail = card.detail
             selectedTagIds = card.tagIds
         }
     }
 
     private func commit() {
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else { return }
         // 若输入框还有未提交的标签，一并收纳。
         if !tagInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             commitTagInput()
         }
         switch mode {
         case .create:
-            state.addCard(content: trimmed, tagIds: selectedTagIds)
+            state.addCard(title: trimmedTitle, detail: detail, tagIds: selectedTagIds)
         case .edit(let card):
-            state.updateCard(id: card.id, content: trimmed, tagIds: selectedTagIds)
+            state.updateCard(id: card.id, title: trimmedTitle, detail: detail, tagIds: selectedTagIds)
         }
         dismiss()
     }
@@ -253,5 +277,135 @@ private extension View {
             .font(.system(size: 11, weight: .medium))
             .foregroundColor(.secondary)
             .textCase(.uppercase)
+    }
+}
+
+/// 无聚焦框的单行文本框。
+/// SwiftUI 的 TextField 底层是 NSTextField，会自己画系统强调色（蓝）聚焦框，
+/// `.focusEffectDisabled()` 管不到它。这里直接包装 NSTextField，把 focusRingType 设为 .none，
+/// 并关闭原生边框/背景（改由外层 SwiftUI 的 .background/.overlay 绘制），从 AppKit 层彻底关掉蓝框。
+struct NoFocusTextField: NSViewRepresentable {
+    @Binding var text: String
+    var placeholder: String = ""
+    var font: NSFont = .systemFont(ofSize: 13)
+    /// 回车提交（用于标签输入框）。主线程派发，避免在 SwiftUI 视图更新中改状态。
+    var onCommit: (() -> Void)? = nil
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = ClickableTextField()
+        field.focusRingType = .none          // 关键：关闭聚焦框
+        field.isBezeled = false              // 关原生边框，交给外层 SwiftUI overlay
+        field.drawsBackground = false        // 关原生背景，交给外层 SwiftUI background
+        field.isEditable = true
+        field.isSelectable = true
+        field.font = font
+        field.placeholderString = placeholder
+        field.stringValue = text
+        field.delegate = context.coordinator
+        // 选中时文字颜色保持正常，避免系统把选区染成强调色。
+        field.textColor = NSColor.labelColor
+        return field
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        // 外部（如建议点击清空）改了 binding，同步回控件。
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+        nsView.placeholderString = placeholder
+        nsView.font = font
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        let parent: NoFocusTextField
+        init(_ parent: NoFocusTextField) { self.parent = parent }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            parent.text = field.stringValue
+        }
+
+        // 仅回车键触发 onCommit，与原 SwiftUI TextField.onCommit 语义一致（失焦不触发）。
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                parent.onCommit?()
+                return true
+            }
+            return false
+        }
+    }
+}
+
+/// 无聚焦框的多行文本编辑器（包装 NSTextView）。
+/// 注意：当前未启用（详情改回 SwiftUI TextEditor，保证点击编辑稳定可靠）。
+/// 保留实现，待后续需要「编辑时光标自动到末尾」等 TextEditor 做不到的能力时再启用。
+struct NoFocusTextView: NSViewRepresentable {
+    @Binding var text: String
+    var font: NSFont = .systemFont(ofSize: 15)
+    var moveCursorToEndOnAppear: Bool = false
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let textView = ClickableTextView()
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.font = font
+        textView.textColor = NSColor.labelColor
+        textView.backgroundColor = .clear
+        textView.drawsBackground = false
+        textView.textContainerInset = NSSize(width: 0, height: 0)
+        textView.textContainer?.lineFragmentPadding = 8
+        textView.insertionPointColor = NSColor.labelColor
+        textView.string = text
+        textView.delegate = context.coordinator
+
+        if moveCursorToEndOnAppear {
+            let end = text.utf16.count
+            textView.setSelectedRange(NSRange(location: end, length: 0))
+            textView.scrollRangeToVisible(NSRange(location: end, length: 0))
+        }
+
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.documentView = textView
+        return scroll
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        guard let textView = nsView.documentView as? NSTextView else { return }
+        if textView.string != text { textView.string = text }
+        textView.font = font
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        let parent: NoFocusTextView
+        init(_ parent: NoFocusTextView) { self.parent = parent }
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            parent.text = textView.string
+        }
+    }
+}
+
+/// NSTextField 子类：嵌入 SwiftUI 后，原生点击聚焦有时失效；
+/// 这里手动拦截 mouseDown，确保点击后立刻成为第一响应者（获得光标、可编辑）。
+final class ClickableTextField: NSTextField {
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+}
+
+/// NSTextView 子类：同上，确保点击详情区能立刻获得光标。
+final class ClickableTextView: NSTextView {
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
     }
 }

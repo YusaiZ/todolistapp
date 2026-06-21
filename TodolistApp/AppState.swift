@@ -69,9 +69,10 @@ final class AppState: ObservableObject {
 
     /// 新建卡片。
     @discardableResult
-    func addCard(content: String, tagIds: [UUID], status: Status = .plan) -> Card {
+    func addCard(title: String, detail: String, tagIds: [UUID], status: Status = .plan) -> Card {
         let nextOrder = (cards.filter { $0.status == status }.map(\.order).max() ?? -1) + 1
-        let card = Card(content: content.trimmingCharacters(in: .whitespacesAndNewlines),
+        let card = Card(title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+                        detail: detail.trimmingCharacters(in: .whitespaces),
                         tagIds: tagIds,
                         status: status,
                         order: nextOrder)
@@ -79,10 +80,12 @@ final class AppState: ObservableObject {
         return card
     }
 
-    /// 更新已有卡片的内容与标签。
-    func updateCard(id: UUID, content: String, tagIds: [UUID]) {
+    /// 更新已有卡片的标题、详情与标签。
+    func updateCard(id: UUID, title: String, detail: String, tagIds: [UUID]) {
         guard let idx = cards.firstIndex(where: { $0.id == id }) else { return }
-        cards[idx].content = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        cards[idx].title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        // detail 是多行备忘，只去首尾空白，保留内部换行。
+        cards[idx].detail = detail.trimmingCharacters(in: .whitespaces)
         cards[idx].tagIds = tagIds
     }
 
