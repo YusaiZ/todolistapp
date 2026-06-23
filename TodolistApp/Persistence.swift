@@ -2,6 +2,12 @@ import Foundation
 
 /// 负责 JSON 文件的读写。
 /// 路径：~/Library/Application Support/TodolistApp/data.json
+///
+/// 数据安全（防止「内存突然变空 → 保存 → 覆盖真实数据」的死亡螺旋）：
+/// 1. load() 解码失败：备份损坏文件为 data.corrupt.json，绝不静默返空。
+/// 2. save() 写入前：先把磁盘当前文件备份为 data.bak.json（保留上一版可恢复）。
+/// 3. save() 拒绝「内存全空 + 历史曾有数据」的保存：用 highWaterMark（只增不减）
+///    记住历史最大卡数；同时检查磁盘 data.bak.json 的实际卡数，双信号防清空。
 struct Persistence {
     static let appName = "TodolistApp"
     static let fileName = "data.json"
@@ -13,32 +19,56 @@ struct Persistence {
             ?? fm.temporaryDirectory
         let dir = base.appendingPathComponent(appName, isDirectory: true)
         if !fm.fileExists(atPath: dir.path) {
-            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            try? fm.createDirectory(atPath: dir.path, withIntermediateDirectories: true)
         }
         return dir.appendingPathComponent(fileName)
     }
 
+    private static var backupURL: URL {
+        dataURL.deletingLastPathComponent().appendingPathComponent("data.bak.json")
+    }
+    private static var corruptURL: URL {
+        dataURL.deletingLastPathComponent().appendingPathComponent("data.corrupt.json")
+    }
+
+    /// 历史最大卡片数（高水位线，只增不减）。
+    /// 关键：不因某次加载到空数据而清零 —— 否则死亡螺旋里它会被一起污染。
+    private static let highWaterMarkKey = "persistence.highWaterMark"
+    private static var highWaterMark: Int {
+        get { UserDefaults.standard.integer(forKey: highWaterMarkKey) }
+        set {
+            // 只允许往大写，绝不回退。
+            if newValue > UserDefaults.standard.integer(forKey: highWaterMarkKey) {
+                UserDefaults.standard.set(newValue, forKey: highWaterMarkKey)
+            }
+        }
+    }
+
+    /// 数某个 JSON 文件里有多少张卡（用于独立检查，避免污染主状态）。
+    private static func cardCount(in url: URL) -> Int {
+        guard let raw = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode(StoreData.self, from: raw) else { return 0 }
+        return decoded.cards.count
+    }
+
     /// 读取。
-    ///
-    /// 安全策略（防止「解码失败 → 显示空 → 防抖保存把空写回磁盘」的死亡螺旋）：
-    /// - 文件不存在 → 全新用户，返回空（正常）。
-    /// - 文件存在但解码失败 → **绝不返回空**，而是把损坏文件备份成 `data.corrupt.json`
-    ///   并返回空。这样至少保住现场，便于排查；同时避免一次异常就把整库抹掉。
-    ///   （历史上曾因一次运行异常触发空保存，导致数据被覆盖丢失。）
     static func load() -> StoreData {
         let url = dataURL
         guard FileManager.default.fileExists(atPath: url.path) else {
             return StoreData(cards: [], tags: [])
         }
         guard let raw = try? Data(contentsOf: url) else {
-            // 文件在但读不出（权限/IO），同样不动它，返回空但不触发覆盖式保存由调用方决定。
             return StoreData(cards: [], tags: [])
         }
         do {
-            return try JSONDecoder().decode(StoreData.self, from: raw)
+            let decoded = try JSONDecoder().decode(StoreData.self, from: raw)
+            // 高水位线只在有数据时抬升；加载到空绝不降低它。
+            if decoded.cards.count > 0 {
+                highWaterMark = decoded.cards.count
+            }
+            return decoded
         } catch {
-            // 解码失败：先把损坏文件备份，再返回空。备份用时间戳避免反复覆盖。
-            let backup = url.deletingLastPathComponent().appendingPathComponent("data.corrupt.json")
+            let backup = corruptURL
             try? FileManager.default.removeItem(at: backup)
             try? FileManager.default.copyItem(at: url, to: backup)
             NSLog("[TodolistApp] data.json 解码失败，已备份到 \(backup.path)。错误：\(error)")
@@ -49,24 +79,56 @@ struct Persistence {
     /// 写入；带缩进便于调试。
     @discardableResult
     static func save(_ data: StoreData) -> Bool {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        // 磁盘上有非空数据时，禁止用空数据覆盖 ——
-        // 防止任何运行异常导致的「空状态」把真实数据抹掉。
         let url = dataURL
-        if data.cards.isEmpty && data.tags.isEmpty,
-           FileManager.default.fileExists(atPath: url.path) {
-            let existingSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
-            if existingSize > 50 {   // 比纯空模板 41 字节大，说明原本有数据
-                NSLog("[TodolistApp] 拒绝用空数据覆盖非空 data.json（原 \(existingSize) 字节），已跳过保存。")
+
+        // 防清空核心检查：内存全空，但「历史高水位 > 0」或「备份文件里有卡」→ 拒绝写入。
+        // 双信号：highWaterMark 防"刚录完就崩"，data.bak.json 防"高水位被早期清零"。
+        if data.cards.isEmpty && data.tags.isEmpty {
+            let historicalMax = highWaterMark
+            let backupCount = cardCount(in: backupURL)
+            if historicalMax > 0 || backupCount > 0 {
+                NSLog("[TodolistApp] 拒绝保存：内存为空但历史高水位=\(historicalMax)、备份卡数=\(backupCount)，疑似异常，已跳过。")
                 return false
             }
         }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let raw = try? encoder.encode(data) else { return false }
+
+        // 写入前备份当前文件（保留上一版，可恢复）。
+        if FileManager.default.fileExists(atPath: url.path) {
+            try? FileManager.default.removeItem(at: backupURL)
+            try? FileManager.default.copyItem(at: url, to: backupURL)
+        }
+
         do {
             try raw.write(to: url, options: .atomic)
+            if data.cards.count > 0 {
+                highWaterMark = data.cards.count
+            }
             return true
         } catch {
-            return false        }
+            return false
+        }
+    }
+
+    /// 从备份恢复（data.bak.json → data.json）。供"数据丢失后手动恢复"用。
+    @discardableResult
+    static func restoreFromBackup() -> Bool {
+        guard FileManager.default.fileExists(atPath: backupURL.path) else { return false }
+        do {
+            if FileManager.default.fileExists(atPath: dataURL.path) {
+                try? FileManager.default.removeItem(at: dataURL)
+            }
+            try FileManager.default.copyItem(at: backupURL, to: dataURL)
+            // 恢复后同步抬升高水位，避免下一次 save 又因为"空内存"被拒。
+            let restored = cardCount(in: dataURL)
+            if restored > 0 { highWaterMark = restored }
+            return true
+        } catch {
+            NSLog("[TodolistApp] 从备份恢复失败：\(error)")
+            return false
+        }
     }
 }

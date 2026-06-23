@@ -71,8 +71,6 @@ cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSSupportsAutomaticTermination</key><true/>
-  <key>NSSupportsSuddenTermination</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict>
 </plist>

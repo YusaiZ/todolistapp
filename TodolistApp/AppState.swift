@@ -25,6 +25,7 @@ final class AppState: ObservableObject {
         // 读取外观偏好；非法值兜底为 .auto。
         let raw = UserDefaults.standard.string(forKey: "appearance") ?? AppearanceMode.auto.rawValue
         self.appearance = AppearanceMode(rawValue: raw) ?? .auto
+        NSLog("[TodolistApp] AppState.init()：从磁盘加载 \(cards.count) 张卡，\(tags.count) 个标签")
         // 不触发首次 didSet 的保存。
     }
 
@@ -44,6 +45,7 @@ final class AppState: ObservableObject {
     /// 立即落盘（用于退出前等场景）。
     func flush() {
         saveTask?.cancel()
+        NSLog("[TodolistApp] flush() 被调用：当前内存 \(cards.count) 张卡，\(tags.count) 个标签")
         Persistence.save(StoreData(cards: cards, tags: tags))
     }
 
